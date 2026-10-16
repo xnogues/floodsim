@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>FloodSim</title>
+<meta name="description" content="Simulador 3D de lluvias torrenciales e inundaciones sobre relieve real y mapas de OpenStreetMap.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<style>
+/* Instrumento hidrológico: mapa a pantalla completa, consolas flotantes oscuras a los lados, línea de tiempo abajo. */
+:root{
+  --ink:#0d1a1f;          /* fondo de consola */
+  --ink-2:#13252c;        /* superficie elevada */
+  --line:#24414a;         /* filetes */
+  --text:#e3eef0;
+  --muted:#8fa9ae;
+  --water:#38c6e8;        /* acento: agua */
+  --water-deep:#1f6fd1;
+  --warn:#f2b33d;
+  --danger:#ef5a43;
+  --ok:#5fd39a;
+  --ui:"Barlow Semi Condensed", "Arial Narrow", system-ui, sans-serif;
+  --mono:"IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:var(--ink);color:var(--text);font:15px/1.4 var(--ui)}
+#map{position:fixed;inset:0}
+.panel{position:fixed;z-index:5;background:color-mix(in srgb,var(--ink) 92%,transparent);backdrop-filter:blur(8px);
+  border:1px solid var(--line);border-radius:10px;overflow:auto;box-shadow:0 10px 30px rgba(0,0,0,.35)}
+#left{top:max(12px,env(safe-area-inset-top));left:max(12px,env(safe-area-inset-left));width:330px;bottom:118px}
+#right{top:max(12px,env(safe-area-inset-top));right:max(12px,env(safe-area-inset-right));width:320px;bottom:118px;display:flex;flex-direction:column}
+.brand{display:flex;align-items:baseline;gap:8px;padding:14px 16px 6px}
+.brand h1{margin:0;font-size:22px;letter-spacing:.02em;font-weight:700}
+.brand h1 span{color:var(--water)}
+.brand small{color:var(--muted);font-size:13px}
+section{padding:10px 16px 14px;border-top:1px solid var(--line)}
+section h2{margin:0 0 8px;font-size:12px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);display:flex;justify-content:space-between;align-items:center}
+label{display:block;font-size:14px;color:var(--text)}
+.row{display:flex;gap:8px;align-items:center}
+.row>*{min-width:0}
+.field{display:grid;grid-template-columns:1fr 108px;gap:6px 10px;align-items:center;margin:7px 0}
+.field .hint{grid-column:1/-1;color:var(--muted);font-size:12.5px;margin-top:-3px}
+input[type=number],input[type=text],input[type=search],select{width:100%;background:var(--ink-2);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:6px 8px;font:14px var(--mono)}
+select{font-family:var(--ui);font-size:14px}
+input[type=range]{width:100%;accent-color:var(--water)}
+input:focus-visible,select:focus-visible,button:focus-visible{outline:2px solid var(--water);outline-offset:1px}
+button{font:600 14px var(--ui);letter-spacing:.02em;border-radius:7px;border:1px solid var(--line);background:var(--ink-2);color:var(--text);padding:7px 12px;cursor:pointer}
+button:hover{border-color:var(--water)}
+button.primary{background:var(--water);color:#062029;border-color:var(--water)}
+button.primary:hover{filter:brightness(1.1)}
+button:disabled{opacity:.45;cursor:not-allowed}
+button.on{border-color:var(--water);color:var(--water)}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 6px}
+.chip{font-size:13px;padding:4px 9px;border-radius:999px}
+.check{display:flex;gap:8px;align-items:flex-start;margin:6px 0;font-size:14px}
+.check input{margin-top:3px;accent-color:var(--water)}
+.muted{color:var(--muted)}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+#results{margin-top:6px;display:flex;flex-direction:column;gap:2px}
+#results button{text-align:left;font-weight:500;font-size:13.5px;padding:6px 8px;background:transparent;border-color:transparent}
+#results button:hover{background:var(--ink-2);border-color:var(--line)}
+.status{font-size:13px;color:var(--muted);margin-top:8px;min-height:18px}
+.status.err{color:var(--danger)}
+.progress{height:4px;background:var(--ink-2);border-radius:2px;overflow:hidden;margin-top:6px}
+.progress i{display:block;height:100%;width:0;background:var(--water);transition:width .2s}
+/* inspector */
+#inspect{padding:12px 16px}
+#inspect .kind{font-size:19px;font-weight:700;margin:2px 0 2px}
+#inspect .sub{color:var(--muted);font-size:13px;margin-bottom:8px}
+dl.kv{display:grid;grid-template-columns:auto 1fr;gap:3px 12px;margin:0;font-size:14px}
+dl.kv dt{color:var(--muted)}
+dl.kv dd{margin:0;text-align:right;font-family:var(--mono);font-size:13px}
+.tags{display:flex;flex-wrap:wrap;gap:4px;margin-top:8px}
+.tag{font-size:12px;border:1px solid var(--line);border-radius:4px;padding:1px 6px;color:var(--muted)}
+.stats{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.stat{background:var(--ink-2);border:1px solid var(--line);border-radius:7px;padding:7px 9px}
+.stat b{display:block;font:500 19px var(--mono)}
+.stat span{font-size:12px;color:var(--muted)}
+.stat.alert b{color:var(--danger)}
+#log{list-style:none;margin:0;padding:0;font-size:13.5px}
+#log li{display:grid;grid-template-columns:58px 1fr;gap:8px;padding:5px 0;border-bottom:1px dashed var(--line);cursor:pointer}
+#log li time{font-family:var(--mono);color:var(--water);font-size:12.5px}
+#log li.house time{color:var(--danger)}
+#log li:hover{color:#fff}
+#probeChart{width:100%;height:120px;display:block}
+.legend{display:flex;flex-wrap:wrap;gap:8px 12px;font-size:12px;color:var(--muted);margin-top:6px}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:-1px}
+.ramp{height:8px;border-radius:4px;background:linear-gradient(90deg,#9fe7f5,#38c6e8 30%,#1f6fd1 65%,#0b2f86);margin:6px 0 2px}
+.rampl{display:flex;justify-content:space-between;font:11px var(--mono);color:var(--muted)}
+/* timeline */
+#timeline{left:max(12px,env(safe-area-inset-left));right:max(12px,env(safe-area-inset-right));bottom:max(12px,env(safe-area-inset-bottom));height:96px;display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:center;padding:10px 14px;overflow:hidden}
+#tl-time{font:500 24px var(--mono);min-width:118px}
+#tl-time small{display:block;font:12px var(--ui);color:var(--muted)}
+#tl-chart{position:relative;height:72px;min-width:0}
+#tl-chart canvas{width:100%;height:100%;display:block;cursor:pointer}
+.tl-ctrl{display:flex;gap:6px;align-items:center}
+.tl-ctrl select{width:auto}
+[hidden]{display:none!important}
+#help{position:fixed;inset:0;z-index:20;background:rgba(5,12,15,.7);display:flex;align-items:center;justify-content:center;padding:16px}
+#help .card{max-width:640px;max-height:90vh;overflow:auto;background:var(--ink);border:1px solid var(--line);border-radius:12px;padding:20px 24px}
+#help h3{margin:0 0 8px;font-size:22px}
+#help p,#help li{font-size:15px;line-height:1.5;color:#cfe0e3}
+#help a{color:var(--water)}
+.maplibregl-popup-content{background:var(--ink);color:var(--text);font:13px var(--ui);border:1px solid var(--line);padding:6px 10px}
+.maplibregl-popup-tip{border-top-color:var(--ink)!important;border-bottom-color:var(--ink)!important}
+.maplibregl-ctrl-attrib{font-size:11px}
+.mode-banner{position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:8;background:var(--warn);color:#211600;font-weight:600;padding:6px 14px;border-radius:999px}
+#toggleL,#toggleR{display:none}
+@media (max-width:900px){
+  #left,#right{width:auto;left:max(8px,env(safe-area-inset-left));right:max(8px,env(safe-area-inset-right));top:auto;bottom:114px;max-height:55vh}
+  #left.hide,#right.hide{display:none}
+  #toggleL,#toggleR{display:block;position:fixed;z-index:9;top:max(10px,env(safe-area-inset-top))}
+  #toggleL{left:10px}#toggleR{right:10px}
+  #timeline{grid-template-columns:auto 1fr;height:96px}
+  #timeline .tl-ctrl.speed{display:none}
+  #tl-time{min-width:90px;font-size:19px}
+}
+@media (prefers-reduced-motion:reduce){.progress i{transition:none}}
+</style>
+</head>
+<body>
+<div id="map" aria-label="Mapa 3D"></div>
+
+<button id="toggleL" type="button">Controles</button>
+<button id="toggleR" type="button">Información</button>
+
+<aside id="left" class="panel">
+  <div class="brand"><h1>Flood<span>Sim</span></h1><small>lluvia · cauces · inundación</small></div>
+
+  <section>
+    <h2>Lugar <button id="btnHelp" class="chip" type="button">¿Cómo funciona?</button></h2>
+    <form id="searchForm" class="row">
+      <input id="q" type="search" placeholder="Buscar pueblo o dirección" autocomplete="off">
+      <button type="submit">Buscar</button>
+    </form>
+    <div id="results"></div>
+    <div class="field">
+      <label for="areaSize">Tamaño de la zona</label>
+      <select id="areaSize">
+        <option value="2000">2 × 2 km</option>
+        <option value="3000">3 × 3 km</option>
+        <option value="4000" selected>4 × 4 km</option>
+        <option value="6000">6 × 6 km</option>
+        <option value="8000">8 × 8 km</option>
+      </select>
+      <label for="resolution">Detalle de la malla</label>
+      <select id="resolution">
+        <option value="200">Rápido</option>
+        <option value="300" selected>Normal</option>
+        <option value="450">Detallado</option>
+      </select>
+      <span class="hint" id="gridInfo"></span>
+    </div>
+    <button id="btnArea" class="primary" type="button" style="width:100%">Preparar la zona que estoy viendo</button>
+    <div class="progress"><i id="prepBar"></i></div>
+    <div id="prepStatus" class="status"></div>
+  </section>
+
+  <section>
+    <h2>Lluvia</h2>
+    <div class="chips" id="presets">
+      <button class="chip" type="button" data-p="20,1,const">Chaparrón</button>
+      <button class="chip" type="button" data-p="60,1,peak">Tormenta fuerte</button>
+      <button class="chip" type="button" data-p="90,3,peak">Gota fría</button>
+      <button class="chip" type="button" data-p="150,2,peak">Extrema</button>
+    </div>
+    <div class="field">
+      <label for="rainI">Intensidad media (mm/h)</label>
+      <input id="rainI" type="number" min="0" max="400" step="5" value="90">
+      <label for="rainD">Duración de la lluvia (h)</label>
+      <input id="rainD" type="number" min="0.1" max="24" step="0.25" value="3">
+      <label for="rainShape">Forma del aguacero</label>
+      <select id="rainShape">
+        <option value="const">Constante</option>
+        <option value="peak" selected>Con pico al principio</option>
+        <option value="late">Con pico al final</option>
+        <option value="pulses">Dos chubascos</option>
+      </select>
+      <span class="hint" id="rainInfo"></span>
+      <label for="soil">Suelo</label>
+      <select id="soil">
+        <option value="0">Saturado o impermeable</option>
+        <option value="3">Arcilloso / urbano</option>
+        <option value="8" selected>Mixto (campos y monte)</option>
+        <option value="20">Arenoso, muy permeable</option>
+      </select>
+      <span class="hint">1 mm de lluvia = 1 litro por m². Lo que el suelo no absorbe escurre.</span>
+    </div>
+  </section>
+
+  <section>
+    <h2>Crecida del río</h2>
+    <label class="check"><input id="riverOn" type="checkbox"> <span>Simular que el río llega crecido desde aguas arriba</span></label>
+    <div class="field">
+      <label for="riverQ">Caudal extra punta (m³/s)</label>
+      <input id="riverQ" type="number" min="0" max="30000" step="100" value="2500">
+      <label for="riverRise">Horas hasta la punta</label>
+      <input id="riverRise" type="number" min="0.25" max="24" step="0.25" value="2">
+      <span class="hint" id="riverInfo">Prepara una zona para detectar el río.</span>
+    </div>
+    <button id="btnInflow" type="button">Marcar a mano por dónde entra el río</button>
+  </section>
+
+  <section>
+    <h2>Simulación</h2>
+    <div class="field">
+      <label for="simH">Tiempo a simular (h)</label>
+      <input id="simH" type="number" min="0.25" max="48" step="0.25" value="6">
+      <label for="manning">Rugosidad del terreno (n)</label>
+      <select id="manning">
+        <option value="0.02">Lisa (asfalto)</option>
+        <option value="0.035" selected>Normal</option>
+        <option value="0.06">Rugosa (matorral, huertas)</option>
+      </select>
+    </div>
+    <label class="check"><input id="obstacles" type="checkbox"> <span>Las casas hacen de muro <span class="muted">(mejor con detalle alto)</span></span></label>
+    <label class="check"><input id="burn" type="checkbox" checked> <span>Encajar en el terreno los cauces de OpenStreetMap</span></label>
+    <div class="row" style="margin-top:8px">
+      <button id="btnRun" class="primary" type="button" disabled style="flex:1">Empezar a llover</button>
+      <button id="btnPause" type="button" disabled>Pausa</button>
+      <button id="btnReset" type="button" disabled>Borrar</button>
+    </div>
+    <div class="progress"><i id="simBar"></i></div>
+    <div id="simStatus" class="status"></div>
+  </section>
+
+  <section>
+    <h2>Capas</h2>
+    <div class="field">
+      <label for="basemap">Mapa de fondo</label>
+      <select id="basemap">
+        <option value="sat" selected>Satélite</option>
+        <option value="osm">OpenStreetMap</option>
+        <option value="topo">Topográfico</option>
+      </select>
+      <label for="exag">Exagerar relieve</label>
+      <input id="exag" type="range" min="1" max="3" step="0.1" value="1.4">
+    </div>
+    <label class="check"><input id="lyBuildings" type="checkbox" checked> Casas y edificios en 3D</label>
+    <label class="check"><input id="lyWaterways" type="checkbox" checked> Ríos, barrancos y acequias (OSM)</label>
+    <label class="check"><input id="lyNetwork" type="checkbox" checked> Rieras que se formarían (según el relieve)</label>
+    <div class="field" style="margin-top:0">
+      <label for="netThr">…con cuenca mayor de</label>
+      <select id="netThr">
+        <option value="2">2 ha</option>
+        <option value="5" selected>5 ha</option>
+        <option value="20">20 ha</option>
+        <option value="100">1 km²</option>
+      </select>
+    </div>
+    <label class="check"><input id="lyHand" type="checkbox"> Zonas bajas junto a los cauces</label>
+    <label class="check"><input id="lyWater3d" type="checkbox" checked> Lámina de agua en 3D</label>
+    <div class="ramp"></div>
+    <div class="rampl"><span>3 cm</span><span>30 cm</span><span>1 m</span><span>3 m+</span></div>
+  </section>
+</aside>
+
+<aside id="right" class="panel">
+  <div id="inspect">
+    <div class="kind">Toca el mapa</div>
+    <div class="sub">Para saber qué hay en un punto: casa, barranco, río, ladera… y cuánta agua le llega.</div>
+  </div>
+  <section>
+    <h2>Situación</h2>
+    <div class="stats">
+      <div class="stat"><b id="stRain" class="num">0 mm</b><span>lluvia caída</span></div>
+      <div class="stat"><b id="stArea" class="num">0 ha</b><span>con más de 10 cm de agua</span></div>
+      <div class="stat" id="stHouseBox"><b id="stHouses" class="num">0</b><span>edificios con agua</span></div>
+      <div class="stat"><b id="stMax" class="num">0 m</b><span>calado máximo fuera de cauce</span></div>
+    </div>
+  </section>
+  <section>
+    <h2>Sensores <button id="btnProbe" class="chip" type="button">+ Añadir</button></h2>
+    <canvas id="probeChart" width="600" height="240"></canvas>
+    <div class="legend" id="probeLegend"><span>Pon un sensor en un barranco o una calle para ver cómo sube el agua.</span></div>
+  </section>
+  <section style="flex:1">
+    <h2>Qué va pasando</h2>
+    <ul id="log"><li class="muted" style="display:block;cursor:default">Aún no ha empezado a llover.</li></ul>
+  </section>
+</aside>
+
+<div id="timeline" class="panel">
+  <div class="tl-ctrl">
+    <button id="tlPlay" type="button" aria-label="Reproducir">▶</button>
+    <div id="tl-time">0:00<small>horas desde el inicio</small></div>
+  </div>
+  <div id="tl-chart"><canvas id="tlCanvas"></canvas></div>
+  <div class="tl-ctrl speed">
+    <label for="tlSpeed" class="muted" style="font-size:13px">Velocidad</label>
+    <select id="tlSpeed">
+      <option value="60">1 min/s</option>
+      <option value="300" selected>5 min/s</option>
+      <option value="900">15 min/s</option>
+      <option value="1800">30 min/s</option>
+    </select>
+    <label class="check" style="margin:0"><input id="tlLive" type="checkbox" checked> En directo</label>
+  </div>
+</div>
+
+<div id="help" hidden>
+  <div class="card">
+    <h3>Cómo funciona FloodSim</h3>
+    <p><b>1. El relieve.</b> Descarga un modelo digital del terreno (cotas de altura de todo el mundo, servidas por AWS Terrain Tiles a partir de datos SRTM y otros). En España la precisión es de unos 30 m en horizontal y pocos metros en vertical, así que los cauces muy estrechos pueden no verse bien.</p>
+    <p><b>2. Lo que hay encima.</b> Casas, ríos, barrancos, acequias y embalses vienen de OpenStreetMap en el momento. Al tocar un punto te dice qué es y cuánta cuenca le vierte.</p>
+    <p><b>3. Por dónde iría el agua.</b> Rellena las hondonadas del terreno, calcula la dirección de máxima pendiente de cada celda y acumula cuánta superficie drena a cada punto. Donde esa superficie es grande se formaría una riera aunque hoy esté seca.</p>
+    <p><b>4. La inundación.</b> Hace llover sobre cada celda de la malla, resta lo que absorbe el suelo y mueve el agua con las ecuaciones de aguas someras simplificadas (modelo inercial local, el mismo enfoque que LISFLOOD-FP). Así ves cómo se llenan los barrancos, se juntan en el río y suben de nivel. Si activas la crecida del río, entra además caudal por el punto donde el río llega a la zona.</p>
+    <p><b>Límites.</b> No tiene en cuenta alcantarillado, puentes, muros, ni el fondo real del cauce (el modelo de terreno ve la superficie del agua del río como si fuera suelo). Sirve para entender y comparar escenarios, no para decisiones de seguridad. Los mapas oficiales de zonas inundables de España están en el <a href="https://sig.miteco.gob.es/snczi/" target="_blank" rel="noopener">SNCZI del Ministerio</a>.</p>
+    <p><b>Controles del mapa.</b> Arrastra para moverte, botón derecho (o Ctrl + arrastrar, o dos dedos) para girar e inclinar la cámara, rueda para acercar.</p>
+    <button id="helpClose" class="primary" type="button">Entendido</button>
+  </div>
+</div>
+
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
